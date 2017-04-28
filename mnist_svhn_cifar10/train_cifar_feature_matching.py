@@ -21,7 +21,7 @@ parser.add_argument('--count', default=400)
 parser.add_argument('--batch_size', default=100)
 parser.add_argument('--unlabeled_weight', type=float, default=1.)
 parser.add_argument('--learning_rate', type=float, default=0.0003)
-parser.add_argument('--data_dir', type=str, default='/home/tim/data/cifar-10-python')
+parser.add_argument('--data_dir', type=str, default='/media/bitss/0D53F42E56755822')
 args = parser.parse_args()
 print(args)
 
@@ -181,7 +181,7 @@ for epoch in range(1200):
     img_bhwc = np.transpose(sample_x[:100,], (0, 2, 3, 1))
     img_tile = plotting.img_tile(img_bhwc, aspect_ratio=1.0, border_color=1.0, stretch=True)
     img = plotting.plot_img(img_tile, title='CIFAR10 samples')
-    plotting.plt.savefig("cifar_sample_feature_match.png")
+    plotting.plt.savefig("cifar_sample_feature_match" + str(epoch) + ".png")
 
     # save params
     #np.savez('disc_params.npz', *[p.get_value() for p in disc_params])
