@@ -4,6 +4,7 @@ import sys
 import tarfile
 from six.moves import urllib
 import numpy as np
+import random
 
 def maybe_download_and_extract(data_dir, url='http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz'):
     if not os.path.exists(os.path.join(data_dir, 'cifar-10-batches-py')):
@@ -33,15 +34,32 @@ def unpickle(file):
 
 def load(data_dir, subset='train'):
     maybe_download_and_extract(data_dir)
+    target_label = np.uint8(1)
     if subset=='train':
         train_data = [unpickle(os.path.join(data_dir,'cifar-10-batches-py/data_batch_' + str(i))) for i in range(1,6)]
         trainx = np.concatenate([d['x'] for d in train_data],axis=0)
         trainy = np.concatenate([d['y'] for d in train_data],axis=0)
-        return trainx, trainy
+        trainx_uni = []
+        trainy_uni = []
+        for i in range(0, len(trainy)):
+            if trainy[i] == target_label:
+                trainx_uni.append(trainx[i])
+                trainy_uni.append(np.uint8(random.randint(0, 9)))
+        trainx_arr = np.array(trainx_uni)
+        trainy_arr = np.array(trainy_uni)
+        return trainx_arr, trainy_arr
     elif subset=='test':
         test_data = unpickle(os.path.join(data_dir,'cifar-10-batches-py/test_batch'))
         testx = test_data['x']
         testy = test_data['y']
-        return testx, testy
+        testx_uni = []
+        testy_uni = []
+        for i in range(0, len(testy)):
+            if testy[i] == target_label:
+                testx_uni.append(testx[i])
+                testy_uni.append(np.uint8(random.randint(0, 9)))
+        testx_arr = np.array(testx_uni)
+        testy_arr = np.array(testy_uni)
+        return testx_arr, testy_arr
     else:
         raise NotImplementedError('subset should be either train or test')
