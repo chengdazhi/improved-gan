@@ -26,8 +26,13 @@ lasagne.random.set_rng(np.random.RandomState(rng.randint(2 ** 15)))
 data_rng = np.random.RandomState(args.seed_data)
 
 # specify generative model
+y_1hot = T.matrix()
 noise = theano_rng.uniform(size=(args.batch_size, 100))
-gen_layers = [LL.InputLayer(shape=(args.batch_size, 100), input_var=noise)]
+gen_layers = [nn.batch_norm(LL.DenseLayer(LL.InputLayer(shape=(args.batch_size, 100), input_var=noise), num_units=256, nonlinearity=T.nnet.softplus))]
+gen_layer_noise = gen_layers[-1]
+gen_layers.append(nn.batch_norm(LL.DenseLayer(LL.InputLayer(shape=(args.batch_size, 10), input_var=y_1hot),num_units=512, nonlinearity=T.nnet.softplus)))
+gen_layer_y = gen_layers[-1]
+gen_layers.append(LL.ConcatLayer([gen_layer_noise,gen_layer_y], axis=1))
 gen_layers.append(nn.batch_norm(LL.DenseLayer(gen_layers[-1], num_units=500, nonlinearity=T.nnet.softplus), g=None))
 gen_layers.append(nn.batch_norm(LL.DenseLayer(gen_layers[-1], num_units=500, nonlinearity=T.nnet.softplus), g=None))
 gen_layers.append(nn.l2normalize(LL.DenseLayer(gen_layers[-1], num_units=28**2, nonlinearity=T.nnet.sigmoid)))
@@ -35,8 +40,14 @@ gen_dat = LL.get_output(gen_layers[-1], deterministic=False)
 
 # specify supervised model
 layers = [LL.InputLayer(shape=(None, 28**2))]
+layer_input = layers[-1]
 layers.append(nn.GaussianNoiseLayer(layers[-1], sigma=0.3))
 layers.append(nn.DenseLayer(layers[-1], num_units=1000))
+layer_feature = layers[-1]
+layers.append(nn.DenseLayer(LL.GaussianNoiseLayer(LL.InputLayer(shape=(None, 10), input_var=y_1hot),
+                                               sigma=0.5), num_units=500)) # Input layer for labels
+layer_y = layers[-1]
+layers.append(LL.ConcatLayer([layer_feature,layer_y],axis=1))
 layers.append(nn.GaussianNoiseLayer(layers[-1], sigma=0.5))
 layers.append(nn.DenseLayer(layers[-1], num_units=500))
 layers.append(nn.GaussianNoiseLayer(layers[-1], sigma=0.5))
@@ -54,12 +65,12 @@ x_lab = T.matrix()
 x_unl = T.matrix()
 
 temp = LL.get_output(gen_layers[-1], init=True)
-temp = LL.get_output(layers[-1], x_lab, deterministic=False, init=True)
+temp = LL.get_output(layers[-1], {layer_input: x_lab}, deterministic=False, init=True)
 init_updates = [u for l in gen_layers+layers for u in getattr(l,'init_updates',[])]
 
-output_before_softmax_lab = LL.get_output(layers[-1], x_lab, deterministic=False)
-output_before_softmax_unl = LL.get_output(layers[-1], x_unl, deterministic=False)
-output_before_softmax_fake = LL.get_output(layers[-1], gen_dat, deterministic=False)
+output_before_softmax_lab = LL.get_output(layers[-1], {layer_input: x_lab}, deterministic=False)
+output_before_softmax_unl = LL.get_output(layers[-1], {layer_input: x_unl}, deterministic=False)
+output_before_softmax_fake = LL.get_output(layers[-1], {layer_input: gen_dat}, deterministic=False)
 
 z_exp_lab = T.mean(nn.log_sum_exp(output_before_softmax_lab))
 z_exp_unl = T.mean(nn.log_sum_exp(output_before_softmax_unl))
@@ -71,12 +82,12 @@ loss_unl = -0.5*T.mean(l_unl) + 0.5*T.mean(T.nnet.softplus(nn.log_sum_exp(output
 
 train_err = T.mean(T.neq(T.argmax(output_before_softmax_lab,axis=1),labels))
 
-mom_gen = T.mean(LL.get_output(layers[-3], gen_dat), axis=0)
-mom_real = T.mean(LL.get_output(layers[-3], x_unl), axis=0)
+mom_gen = T.mean(LL.get_output(layers[-3], {layer_input: gen_dat}), axis=0)
+mom_real = T.mean(LL.get_output(layers[-3], {layer_input: x_unl}), axis=0)
 loss_gen = T.mean(T.square(mom_gen - mom_real))
 
 # test error
-output_before_softmax = LL.get_output(layers[-1], x_lab, deterministic=True)
+output_before_softmax = LL.get_output(layers[-1], {layer_input: x_lab}, deterministic=True)
 test_err = T.mean(T.neq(T.argmax(output_before_softmax,axis=1),labels))
 
 # Theano functions for training and testing
@@ -88,10 +99,10 @@ disc_avg_updates = [(a,a+0.0001*(p-a)) for p,a in zip(disc_params,disc_param_avg
 disc_avg_givens = [(p,a) for p,a in zip(disc_params,disc_param_avg)]
 gen_params = LL.get_all_params(gen_layers[-1], trainable=True)
 gen_param_updates = nn.adam_updates(gen_params, loss_gen, lr=lr, mom1=0.5)
-init_param = th.function(inputs=[x_lab], outputs=None, updates=init_updates)
-train_batch_disc = th.function(inputs=[x_lab,labels,x_unl,lr], outputs=[loss_lab, loss_unl, train_err], updates=disc_param_updates+disc_avg_updates)
-train_batch_gen = th.function(inputs=[x_unl,lr], outputs=[loss_gen], updates=gen_param_updates)
-test_batch = th.function(inputs=[x_lab,labels], outputs=test_err, givens=disc_avg_givens)
+init_param = th.function(inputs=[x_lab, y_1hot], outputs=None, updates=init_updates)
+train_batch_disc = th.function(inputs=[x_lab,labels,x_unl,y_1hot,lr], outputs=[loss_lab, loss_unl, train_err], updates=disc_param_updates+disc_avg_updates)
+train_batch_gen = th.function(inputs=[x_unl,y_1hot,lr], outputs=[loss_gen], updates=gen_param_updates)
+test_batch = th.function(inputs=[x_lab,y_1hot,labels], outputs=test_err, givens=disc_avg_givens)
 
 # load MNIST data
 data = np.load('mnist.npz')
@@ -102,6 +113,8 @@ trainy = np.concatenate([data['y_train'], data['y_valid']]).astype(np.int32)
 nr_batches_train = int(trainx.shape[0]/args.batch_size)
 testx = data['x_test'].astype(th.config.floatX)
 testy = data['y_test'].astype(np.int32)
+testy_1hot = np.zeros((len(testy), 10), dtype=np.float32)
+testy_1hot[np.arange(len(testy)), testy] = 1
 nr_batches_test = int(testx.shape[0]/args.batch_size)
 
 # select labeled data
@@ -115,8 +128,8 @@ for j in range(10):
     tys.append(trainy[trainy==j][:args.count])
 txs = np.concatenate(txs, axis=0)
 tys = np.concatenate(tys, axis=0)
-
-init_param(trainx[:500]) # data dependent initialization
+print('total_num:' + str(trainx_unl.shape[0]))
+print('txs length:' + str(txs.shape[0]))
 
 # //////////// perform training //////////////
 lr = 0.003
@@ -126,14 +139,19 @@ for epoch in range(300):
     # construct randomly permuted minibatches
     trainx = []
     trainy = []
-    for t in range(trainx_unl.shape[0]/txs.shape[0]):
+    for t in range(int(trainx_unl.shape[0]/txs.shape[0])):
         inds = rng.permutation(txs.shape[0])
         trainx.append(txs[inds])
         trainy.append(tys[inds])
     trainx = np.concatenate(trainx, axis=0)
-    trainy = np.concatenate(trainy, axis=0)
     trainx_unl = trainx_unl[rng.permutation(trainx_unl.shape[0])]
     trainx_unl2 = trainx_unl2[rng.permutation(trainx_unl2.shape[0])]
+    trainy = np.concatenate(trainy, axis=0)
+    trainy_1hot = np.zeros((len(trainy), 10), dtype=np.float32)
+    trainy_1hot[np.arange(len(trainy)), trainy] = 1
+
+    if epoch==0:
+        init_param(trainx[:100], trainy_1hot[:100]) # data dependent initialization, originally 500
 
     # train
     loss_lab = 0.
@@ -141,11 +159,11 @@ for epoch in range(300):
     train_err = 0.
     for t in range(nr_batches_train):
         ll, lu, te = train_batch_disc(trainx[t*args.batch_size:(t+1)*args.batch_size],trainy[t*args.batch_size:(t+1)*args.batch_size],
-                                        trainx_unl[t*args.batch_size:(t+1)*args.batch_size],lr)
+                                        trainx_unl[t*args.batch_size:(t+1)*args.batch_size],trainy_1hot[t*args.batch_size:(t+1)*args.batch_size],lr)
         loss_lab += ll
         loss_unl += lu
         train_err += te
-        e = train_batch_gen(trainx_unl2[t*args.batch_size:(t+1)*args.batch_size],lr)
+        e = train_batch_gen(trainx_unl2[t*args.batch_size:(t+1)*args.batch_size],trainy_1hot[t*args.batch_size:(t+1)*args.batch_size],lr)
     loss_lab /= nr_batches_train
     loss_unl /= nr_batches_train
     train_err /= nr_batches_train
@@ -153,7 +171,7 @@ for epoch in range(300):
     # test
     test_err = 0.
     for t in range(nr_batches_test):
-        test_err += test_batch(testx[t*args.batch_size:(t+1)*args.batch_size],testy[t*args.batch_size:(t+1)*args.batch_size])
+        test_err += test_batch(testx[t*args.batch_size:(t+1)*args.batch_size],testy_1hot[t*args.batch_size:(t+1)*args.batch_size],testy[t*args.batch_size:(t+1)*args.batch_size])
     test_err /= nr_batches_test
 
     # report
